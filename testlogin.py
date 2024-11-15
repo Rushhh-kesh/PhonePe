@@ -216,6 +216,13 @@ def main_app():
                     "text/csv",
                     key='download-csv'
                 )
+                txt = transactions_df.to_string(index=False)
+                st.download_button(
+                    label="Download Transactions as TXT",
+                    data=txt,
+                    file_name="transactions.txt",
+                    mime="text/plain"
+                )
 
         with tab3:
             if analyzer.transactions:
