@@ -14,7 +14,9 @@ st.set_page_config(page_title="Transaction Analyzer", layout="wide")
 USER_CREDENTIALS = {
     "FroTest": "FroTest123",
     "ForRushi": "ForRushi",
-    "ForFriends": "ForFriends123"
+    "ForFriends": "ForFriends123", 
+    "AskedRushi?": "HeSaidYes",
+    "hMMMMM":"HHHHHm"
 }
 
 def login():
