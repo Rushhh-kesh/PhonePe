@@ -43,7 +43,20 @@ class TransactionAnalyzer:
     def __init__(self, pdf_path: str, language: str = 'en'):
         self.transactions = self._parse_transactions(pdf_path)
         self.language = language
+        self.filtered_transactions = self.transactions
 
+    def filter_by_date(self, start_date: datetime, end_date: datetime):
+        """Filter transactions by date range."""
+        if not start_date or not end_date:
+            self.filtered_transactions = self.transactions
+            return self.filtered_transactions
+            
+        self.filtered_transactions = [
+            t for t in self.transactions
+            if start_date.date() <= t['date'].date() <= end_date.date()
+        ]
+        return self.filtered_transactions
+    
     def _parse_date(self, date_str: str) -> datetime:
         """Parse date string with error handling."""
         try:
@@ -93,10 +106,10 @@ class TransactionAnalyzer:
         return sorted(transactions, key=lambda x: x['date'], reverse=True) if transactions else []
 
     def get_total_spending(self):
-        return sum(t['amount'] for t in self.transactions if t['type'] == 'DEBIT')
+        return sum(t['amount'] for t in self.filtered_transactions if t['type'] == 'DEBIT')
 
     def get_total_income(self):
-        return sum(t['amount'] for t in self.transactions if t['type'] == 'CREDIT')
+        return sum(t['amount'] for t in self.filtered_transactions if t['type'] == 'CREDIT')
 
     def get_balance(self):
         return self.get_total_income() - self.get_total_spending()
@@ -105,7 +118,7 @@ class TransactionAnalyzer:
         """Analyze spending by merchant."""
         from collections import defaultdict
         merchant_spending = defaultdict(float)
-        for t in self.transactions:
+        for t in self.filtered_transactions:
             if t['type'] == 'DEBIT':
                 merchant_spending[t['description']] += t['amount']
         return sorted(merchant_spending.items(), key=lambda x: x[1], reverse=True)
@@ -148,25 +161,33 @@ def translate(text, language):
         'Total Spending': {'en': 'Total Spending', 'hi': 'कुल खर्च', 'mr': 'एकूण खर्च'},
         'Total Income': {'en': 'Total Income', 'hi': 'कुल आय', 'mr': 'एकूण उत्पन्न'},
         'Net Balance': {'en': 'Net Balance', 'hi': 'कुल शेष', 'mr': 'निव्वळ शिल्लक'},
-        'Analysis Period': {'en': 'Analysis Period', 'hi': 'विश्लेषण अवधि', 'mr': 'विश्लेषण कालावधी'}
+        'Analysis Period': {'en': 'Analysis Period', 'hi': 'विश्लेषण अवधि', 'mr': 'विश्लेषण कालावधी'},
+        'Date Range': {'en': 'Date Range', 'hi': 'तारीख सीमा', 'mr': 'तारीख श्रेणी'},
+        'Start Date': {'en': 'Start Date', 'hi': 'प्रारंभ तिथि', 'mr': 'सुरुवात तारीख'},
+        'End Date': {'en': 'End Date', 'hi': 'अंतिम तिथि', 'mr': 'शेवटची तारीख'}
     }
     return translations.get(text, {}).get(language, text)
 
 def main_app():
     """Main application after user is logged in."""
     st.title("📊 Transaction Analyzer")
-    st.write("Upload your PDF statement to analyze transactions")
-
-    col1, col2, col3 = st.columns(3)
-    if col1.button('English'):
+    
+    # Create two rows of columns for language and date filters
+    # Language selection row
+    st.write("Select Language:")
+    lang_col1, lang_col2, lang_col3, *spacing = st.columns([1, 1, 1, 2, 2])
+    
+    if lang_col1.button('English', use_container_width=True):
         selected_language = 'en'
-    elif col2.button('हिन्दी'):
+    elif lang_col2.button('हिन्दी', use_container_width=True):
         selected_language = 'hi'
-    elif col3.button('मराठी'):
+    elif lang_col3.button('मराठी', use_container_width=True):
         selected_language = 'mr'
     else:
         selected_language = 'en'
 
+    st.write("---")  # Add a separator line
+    
     uploaded_file = st.file_uploader("Choose a PDF file", type=['pdf'])
 
     if uploaded_file is not None:
@@ -179,6 +200,46 @@ def main_app():
             st.warning("No transactions were extracted. Please check the PDF format.")
             return
 
+        # Date filter row with a better layout
+        st.subheader(translate("Date Range", selected_language))
+        date_col1, date_col2, *remaining_cols = st.columns([2, 2, 1, 1])
+        
+        if analyzer.transactions:
+            min_date = min(t['date'] for t in analyzer.transactions)
+            max_date = max(t['date'] for t in analyzer.transactions)
+            
+            # Add date filters in the main content area
+            with date_col1:
+                start_date = st.date_input(
+                    translate("Start Date", selected_language),
+                    min_date,
+                    min_value=min_date,
+                    max_value=max_date,
+                    format="YYYY-MM-DD"
+                )
+            
+            with date_col2:
+                end_date = st.date_input(
+                    translate("End Date", selected_language),
+                    max_date,
+                    min_value=min_date,
+                    max_value=max_date,
+                    format="YYYY-MM-DD"
+                )
+
+            # Convert date_input to datetime
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            
+            # Apply date filter
+            analyzer.filter_by_date(start_datetime, end_datetime)
+
+            # Add a small info text about the selected date range
+            st.caption(f"Showing transactions from {start_date.strftime('%b %d, %Y')} to {end_date.strftime('%b %d, %Y')}")
+        
+        st.write("---")  # Add a separator line
+
+        # Tabs for different views
         tab1, tab2, tab3 = st.tabs([
             translate("📈 Overview", selected_language), 
             translate("💰 Transactions", selected_language), 
@@ -188,44 +249,62 @@ def main_app():
         with tab1:
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric(translate("Total Spending", selected_language), f"{analyzer.get_total_spending():,.2f}")
+                st.metric(
+                    translate("Total Spending", selected_language), 
+                    f"₹{analyzer.get_total_spending():,.2f}"
+                )
             with col2:
-                st.metric(translate("Total Income", selected_language), f"{analyzer.get_total_income():,.2f}")
+                st.metric(
+                    translate("Total Income", selected_language), 
+                    f"₹{analyzer.get_total_income():,.2f}"
+                )
             with col3:
-                st.metric(translate("Net Balance", selected_language), f"{analyzer.get_balance():,.2f}")
-
-            if analyzer.transactions:
-                st.info(f"{translate('Analysis Period', selected_language)}: {analyzer.transactions[-1]['date'].strftime('%b %d')} to {analyzer.transactions[0]['date'].strftime('%b %d, %Y')}")
+                st.metric(
+                    translate("Net Balance", selected_language), 
+                    f"₹{analyzer.get_balance():,.2f}"
+                )
 
         with tab2:
-            if analyzer.transactions:
+            if analyzer.filtered_transactions:
                 transactions_df = pd.DataFrame([{
-                    translate('Date', selected_language): t['date'].strftime('%Y-%m-%d') if t['date'] else "Invalid Date",
+                    translate('Date', selected_language): t['date'].strftime('%Y-%m-%d'),
                     translate('Description', selected_language): t['description'],
                     translate('Type', selected_language): t['type'],
-                    translate('Amount', selected_language): f"{t['amount']:,.2f}"
-                } for t in analyzer.transactions])
+                    translate('Amount', selected_language): f"₹{t['amount']:,.2f}"
+                } for t in analyzer.filtered_transactions])
 
-                st.dataframe(transactions_df, use_container_width=True)
+                st.dataframe(
+                    transactions_df, 
+                    use_container_width=True,
+                    hide_index=True
+                )
 
+                # Download buttons in columns for better layout
+                dl_col1, dl_col2, *spacing = st.columns([2, 2, 4])
+                
                 csv = transactions_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    translate("Download Transactions CSV", selected_language),
-                    csv,
-                    "transactions.csv",
-                    "text/csv",
-                    key='download-csv'
-                )
+                with dl_col1:
+                    st.download_button(
+                        translate("Download CSV", selected_language),
+                        csv,
+                        "transactions.csv",
+                        "text/csv",
+                        key='download-csv',
+                        use_container_width=True
+                    )
+                
                 txt = transactions_df.to_string(index=False)
-                st.download_button(
-                    label="Download Transactions as TXT",
-                    data=txt,
-                    file_name="transactions.txt",
-                    mime="text/plain"
-                )
+                with dl_col2:
+                    st.download_button(
+                        translate("Download TXT", selected_language),
+                        txt,
+                        "transactions.txt",
+                        "text/plain",
+                        use_container_width=True
+                    )
 
         with tab3:
-            if analyzer.transactions:
+            if analyzer.filtered_transactions:
                 fig_daily, fig_merchants, fig_pie = create_charts(analyzer)
                 st.plotly_chart(fig_daily, use_container_width=True)
                 st.plotly_chart(fig_merchants, use_container_width=True)
