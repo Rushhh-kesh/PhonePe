@@ -3,9 +3,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import pdfplumber
-from datetime import datetime
+from datetime import datetime, timedelta
 import tempfile
 import os
+import atexit
 
 # Page configuration (must be first)
 st.set_page_config(page_title="Transaction Analyzer", layout="wide")
@@ -164,155 +165,244 @@ def translate(text, language):
         'Analysis Period': {'en': 'Analysis Period', 'hi': 'विश्लेषण अवधि', 'mr': 'विश्लेषण कालावधी'},
         'Date Range': {'en': 'Date Range', 'hi': 'तारीख सीमा', 'mr': 'तारीख श्रेणी'},
         'Start Date': {'en': 'Start Date', 'hi': 'प्रारंभ तिथि', 'mr': 'सुरुवात तारीख'},
-        'End Date': {'en': 'End Date', 'hi': 'अंतिम तिथि', 'mr': 'शेवटची तारीख'}
+        'End Date': {'en': 'End Date', 'hi': 'अंतिम तिथि', 'mr': 'शेवटची तारीख'},
+        # New translations for time periods
+        'Last Day': {'en': 'Last Day', 'hi': 'पिछला दिन', 'mr': 'मागील दिवस'},
+        'Last 7 Days': {'en': 'Last 7 Days', 'hi': 'पिछले 7 दिन', 'mr': 'मागील ७ दिवस'},
+        'Last 30 Days': {'en': 'Last 30 Days', 'hi': 'पिछले 30 दिन', 'mr': 'मागील ३० दिवस'},
+        'Last Year': {'en': 'Last Year', 'hi': 'पिछला साल', 'mr': 'मागील वर्ष'},
+        # Additional translations for tabs and download buttons
+        '📈 Overview': {'en': '📈 Overview', 'hi': '📈 अवलोकन', 'mr': '📈 आढावा'},
+        '💰 Transactions': {'en': '💰 Transactions', 'hi': '💰 लेन-देन', 'mr': '💰 व्यवहार'},
+        '📊 Charts': {'en': '📊 Charts', 'hi': '📊 चार्ट', 'mr': '📊 आलेख'},
+        'Download CSV': {'en': 'Download CSV', 'hi': 'CSV डाउनलोड करें', 'mr': 'CSV डाउनलोड करा'},
+        'Download TXT': {'en': 'Download TXT', 'hi': 'TXT डाउनलोड करें', 'mr': 'TXT डाउनलोड करा'},
+        'Description': {'en': 'Description', 'hi': 'विवरण', 'mr': 'वर्णन'},
+        'Type': {'en': 'Type', 'hi': 'प्रकार', 'mr': 'प्रकार'}
     }
     return translations.get(text, {}).get(language, text)
+
+def get_date_range(period: str, max_date: datetime, min_date: datetime) -> tuple:
+    """
+    Calculate start and end dates based on the selected period while respecting data bounds.
+    
+    Args:
+        period: String indicating the time period ('1D', '7D', '30D', '1Y')
+        max_date: Maximum date in the dataset
+        min_date: Minimum date in the dataset
+    
+    Returns:
+        tuple: (start_date, end_date) within the valid date range
+    """
+    end_date = max_date.date()
+    
+    # Calculate the requested start date
+    if period == "1D":
+        requested_start = end_date - timedelta(days=1)
+    elif period == "7D":
+        requested_start = end_date - timedelta(days=7)
+    elif period == "30D":
+        requested_start = end_date - timedelta(days=30)
+    elif period == "1Y":
+        requested_start = end_date - timedelta(days=365)
+    else:
+        return None, None
+    
+    # Ensure the start date doesn't go before the minimum date in the dataset
+    actual_start = max(requested_start, min_date.date())
+    
+    return actual_start, end_date
 
 def main_app():
     """Main application after user is logged in."""
     st.title("📊 Transaction Analyzer")
     
-    # Create two rows of columns for language and date filters
+    # Initialize language in session state if not present
+    if 'selected_language' not in st.session_state:
+        st.session_state.selected_language = 'en'
+    
     # Language selection row
     st.write("Select Language:")
     lang_col1, lang_col2, lang_col3, *spacing = st.columns([1, 1, 1, 2, 2])
     
     if lang_col1.button('English', use_container_width=True):
-        selected_language = 'en'
+        st.session_state.selected_language = 'en'
     elif lang_col2.button('हिन्दी', use_container_width=True):
-        selected_language = 'hi'
+        st.session_state.selected_language = 'hi'
     elif lang_col3.button('मराठी', use_container_width=True):
-        selected_language = 'mr'
-    else:
-        selected_language = 'en'
+        st.session_state.selected_language = 'mr'
 
-    st.write("---")  # Add a separator line
+    selected_language = st.session_state.selected_language
+    st.write("---")
     
-    uploaded_file = st.file_uploader("Choose a PDF file", type=['pdf'])
+    uploaded_file = st.file_uploader("Choose a PDF file", type=['pdf'], key="pdf_uploader")
+    analyzer = None
+    pdf_path = None
 
-    if uploaded_file is not None:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            pdf_path = tmp_file.name
+    try:
+        if uploaded_file is not None:
+            # Create a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                tmp_file.write(uploaded_file.read())
+                pdf_path = tmp_file.name
 
-        analyzer = TransactionAnalyzer(pdf_path, language=selected_language)
-        if not analyzer.transactions:
-            st.warning("No transactions were extracted. Please check the PDF format.")
-            return
-
-        # Date filter row with a better layout
-        st.subheader(translate("Date Range", selected_language))
-        date_col1, date_col2, *remaining_cols = st.columns([2, 2, 1, 1])
-        
-        if analyzer.transactions:
-            min_date = min(t['date'] for t in analyzer.transactions)
-            max_date = max(t['date'] for t in analyzer.transactions)
-            
-            # Add date filters in the main content area
-            with date_col1:
-                start_date = st.date_input(
-                    translate("Start Date", selected_language),
-                    min_date,
-                    min_value=min_date,
-                    max_value=max_date,
-                    format="YYYY-MM-DD"
-                )
-            
-            with date_col2:
-                end_date = st.date_input(
-                    translate("End Date", selected_language),
-                    max_date,
-                    min_value=min_date,
-                    max_value=max_date,
-                    format="YYYY-MM-DD"
-                )
-
-            # Convert date_input to datetime
-            start_datetime = datetime.combine(start_date, datetime.min.time())
-            end_datetime = datetime.combine(end_date, datetime.max.time())
-            
-            # Apply date filter
-            analyzer.filter_by_date(start_datetime, end_datetime)
-
-            # Add a small info text about the selected date range
-            st.caption(f"Showing transactions from {start_date.strftime('%b %d, %Y')} to {end_date.strftime('%b %d, %Y')}")
-        
-        st.write("---")  # Add a separator line
-
-        # Tabs for different views
-        tab1, tab2, tab3 = st.tabs([
-            translate("📈 Overview", selected_language), 
-            translate("💰 Transactions", selected_language), 
-            translate("📊 Charts", selected_language)
-        ])
-
-        with tab1:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(
-                    translate("Total Spending", selected_language), 
-                    f"₹{analyzer.get_total_spending():,.2f}"
-                )
-            with col2:
-                st.metric(
-                    translate("Total Income", selected_language), 
-                    f"₹{analyzer.get_total_income():,.2f}"
-                )
-            with col3:
-                st.metric(
-                    translate("Net Balance", selected_language), 
-                    f"₹{analyzer.get_balance():,.2f}"
-                )
-
-        with tab2:
-            if analyzer.filtered_transactions:
-                transactions_df = pd.DataFrame([{
-                    translate('Date', selected_language): t['date'].strftime('%Y-%m-%d'),
-                    translate('Description', selected_language): t['description'],
-                    translate('Type', selected_language): t['type'],
-                    translate('Amount', selected_language): f"₹{t['amount']:,.2f}"
-                } for t in analyzer.filtered_transactions])
-
-                st.dataframe(
-                    transactions_df, 
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-                # Download buttons in columns for better layout
-                dl_col1, dl_col2, *spacing = st.columns([2, 2, 4])
+            try:
+                # Create analyzer instance with session state language
+                analyzer = TransactionAnalyzer(pdf_path, language=selected_language)
                 
-                csv = transactions_df.to_csv(index=False).encode('utf-8')
-                with dl_col1:
-                    st.download_button(
-                        translate("Download CSV", selected_language),
-                        csv,
-                        "transactions.csv",
-                        "text/csv",
-                        key='download-csv',
-                        use_container_width=True
-                    )
+                if not analyzer.transactions:
+                    st.warning("No transactions were extracted. Please check the PDF format.")
+                    return
+
+                # Date filter section
+                st.subheader(translate("Date Range", selected_language))
                 
-                txt = transactions_df.to_string(index=False)
-                with dl_col2:
-                    st.download_button(
-                        translate("Download TXT", selected_language),
-                        txt,
-                        "transactions.txt",
-                        "text/plain",
-                        use_container_width=True
+                quick_filter_col1, quick_filter_col2, quick_filter_col3, quick_filter_col4, *remaining = st.columns([1, 1, 1, 1, 2])
+                
+                min_date = min(t['date'] for t in analyzer.transactions)
+                max_date = max(t['date'] for t in analyzer.transactions)
+                
+                # Initialize session state for dates
+                if 'start_date' not in st.session_state:
+                    st.session_state.start_date = min_date.date()
+                if 'end_date' not in st.session_state:
+                    st.session_state.end_date = max_date.date()
+
+                # Quick filter buttons
+                if quick_filter_col1.button(translate("Last Day", selected_language), use_container_width=True):
+                        st.session_state.start_date, st.session_state.end_date = get_date_range("1D", max_date, min_date)
+                if quick_filter_col2.button(translate("Last 7 Days", selected_language), use_container_width=True):
+                        st.session_state.start_date, st.session_state.end_date = get_date_range("7D", max_date, min_date)
+                if quick_filter_col3.button(translate("Last 30 Days", selected_language), use_container_width=True):
+                        st.session_state.start_date, st.session_state.end_date = get_date_range("30D", max_date, min_date)
+                if quick_filter_col4.button(translate("Last Year", selected_language), use_container_width=True):
+                        st.session_state.start_date, st.session_state.end_date = get_date_range("1Y", max_date, min_date)
+
+                if st.session_state.start_date > min_date.date():
+                    st.info(f"Note: The selected date range has been adjusted to match the available data (starting from {min_date.date().strftime('%Y-%m-%d')})")
+
+                # Custom date range inputs
+                date_col1, date_col2, *remaining_cols = st.columns([2, 2, 1, 1])
+                
+                with date_col1:
+                    start_date = st.date_input(
+                        translate("Start Date", selected_language),
+                        st.session_state.start_date,
+                        min_value=min_date.date(),
+                        max_value=max_date.date(),
+                        format="YYYY-MM-DD"
                     )
+                    st.session_state.start_date = start_date
+                    
+                with date_col2:
+                    end_date = st.date_input(
+                        translate("End Date", selected_language),
+                        st.session_state.end_date,
+                        min_value=min_date.date(),
+                        max_value=max_date.date(),
+                        format="YYYY-MM-DD"
+                    )
+                    st.session_state.end_date = end_date
 
-        with tab3:
-            if analyzer.filtered_transactions:
-                fig_daily, fig_merchants, fig_pie = create_charts(analyzer)
-                st.plotly_chart(fig_daily, use_container_width=True)
-                st.plotly_chart(fig_merchants, use_container_width=True)
-                col1, col2 = st.columns([2, 1])
-                with col2:
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                # Convert date_input to datetime
+                start_datetime = datetime.combine(st.session_state.start_date, datetime.min.time())
+                end_datetime = datetime.combine(st.session_state.end_date, datetime.max.time())
+                
+                # Apply date filter
+                analyzer.filter_by_date(start_datetime, end_datetime)
 
-        os.unlink(pdf_path)
+                st.caption(f"Showing transactions from {st.session_state.start_date.strftime('%b %d, %Y')} to {st.session_state.end_date.strftime('%b %d, %Y')}")
+        
+                st.write("---")
+
+                # Tabs for different views
+                tab1, tab2, tab3 = st.tabs([
+                    translate("📈 Overview", selected_language), 
+                    translate("💰 Transactions", selected_language), 
+                    translate("📊 Charts", selected_language)
+                ])
+
+                with tab1:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric(
+                            translate("Total Spending", selected_language), 
+                            f"₹{analyzer.get_total_spending():,.2f}"
+                        )
+                    with col2:
+                        st.metric(
+                            translate("Total Income", selected_language), 
+                            f"₹{analyzer.get_total_income():,.2f}"
+                        )
+                    with col3:
+                        st.metric(
+                            translate("Net Balance", selected_language), 
+                            f"₹{analyzer.get_balance():,.2f}"
+                        )
+
+                with tab2:
+                    if analyzer.filtered_transactions:
+                        transactions_df = pd.DataFrame([{
+                            translate('Date', selected_language): t['date'].strftime('%Y-%m-%d'),
+                            translate('Description', selected_language): t['description'],
+                            translate('Type', selected_language): t['type'],
+                            translate('Amount', selected_language): f"₹{t['amount']:,.2f}"
+                        } for t in analyzer.filtered_transactions])
+
+                        st.dataframe(
+                            transactions_df, 
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                        dl_col1, dl_col2, *spacing = st.columns([2, 2, 4])
+                        
+                        csv = transactions_df.to_csv(index=False).encode('utf-8')
+                        with dl_col1:
+                            st.download_button(
+                                translate("Download CSV", selected_language),
+                                csv,
+                                "transactions.csv",
+                                "text/csv",
+                                key='download-csv',
+                                use_container_width=True
+                            )
+                        
+                        txt = transactions_df.to_string(index=False)
+                        with dl_col2:
+                            st.download_button(
+                                translate("Download TXT", selected_language),
+                                txt,
+                                "transactions.txt",
+                                "text/plain",
+                                use_container_width=True
+                            )
+
+                with tab3:
+                    if analyzer.filtered_transactions:
+                        fig_daily, fig_merchants, fig_pie = create_charts(analyzer)
+                        st.plotly_chart(fig_daily, use_container_width=True)
+                        st.plotly_chart(fig_merchants, use_container_width=True)
+                        col1, col2 = st.columns([2, 1])
+                        with col2:
+                            st.plotly_chart(fig_pie, use_container_width=True)
+
+            finally:
+                # Close any open file handles in the analyzer
+                if hasattr(analyzer, '_pdf') and analyzer._pdf is not None:
+                    analyzer._pdf.close()
+
+        else:
+            st.info("Please upload a PDF file to analyze your transactions.")
+
+    finally:
+        # Clean up temporary file if it exists
+        if pdf_path and os.path.exists(pdf_path):
+            try:
+                os.unlink(pdf_path)
+            except PermissionError:
+                # If we can't delete now, try to delete on next run
+                pass
 
 def main():
     """Main function to control the app flow with login."""
