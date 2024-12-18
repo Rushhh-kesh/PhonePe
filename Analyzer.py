@@ -20,26 +20,6 @@ USER_CREDENTIALS = {
     "hMMMMM":"HHHHHm"
 }
 
-def login():
-    """Login page for user authentication."""
-    st.title("🔒 Login Page")
-    username = st.text_input("Enter your Username")
-    password = st.text_input("Enter your Password", type="password")
-    login_button = st.button("Login")
-
-    if login_button:
-        if username in USER_CREDENTIALS and password == USER_CREDENTIALS[username]:
-            st.session_state['logged_in'] = True
-            st.session_state['username'] = username
-            st.success(f"Welcome, {username}!")
-        else:
-            st.error("Invalid username or password. Please try again.")
-
-def logout():
-    """Logout function."""
-    st.session_state['logged_in'] = False
-    st.session_state['username'] = ""
-
 class TransactionAnalyzer:
     def __init__(self, pdf_path: str, language: str = 'en'):
         self.transactions = self._parse_transactions(pdf_path)
@@ -405,20 +385,8 @@ def main_app():
                 pass
 
 def main():
-    """Main function to control the app flow with login."""
-    if 'logged_in' not in st.session_state:
-        st.session_state['logged_in'] = False
-        st.session_state['username'] = ""
-
-    if not st.session_state['logged_in']:
-        login()
-    else:
-        st.sidebar.title("Menu")
-        st.sidebar.write(f"Logged in as: {st.session_state['username']}")
-        if st.sidebar.button("Logout"):
-            logout()
-        else:
-            main_app()
+    """Main function to launch the app."""
+    main_app()
 
 if __name__ == "__main__":
     main()
